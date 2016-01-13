@@ -8,6 +8,7 @@
          format/1,
          read_binary/2,
          send/3,
+	 get_frame/2,
          ack/1,
          to_binary/1,
          overlay/2
@@ -104,6 +105,13 @@ send({Transport, Socket}, PrevSettings, NewSettings) ->
     Frame = [Header, Payload],
     lager:debug("sending settings ~p", [Frame]),
     Transport:send(Socket, Frame).
+
+get_frame(PrevSettings, NewSettings) ->
+    Diff = http2_settings:diff(PrevSettings, NewSettings),
+    Payload = make_payload(Diff),
+    L = size(Payload),
+    Header = <<L:24,?SETTINGS:8,16#0:8,0:1,0:31>>,
+    [Header, Payload].
 
 -spec make_payload(settings_proplist()) -> binary().
 make_payload(Diff) ->
