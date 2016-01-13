@@ -9,6 +9,7 @@
     from_frames/1,
     read_binary/2,
     to_frame/3,
+    to_frame/4,
     send/4,
     to_binary/1
   ]).
@@ -40,11 +41,15 @@ is_priority(#frame_header{flags=F}) when ?IS_FLAG(F, ?FLAG_PRIORITY) ->
 is_priority(_) ->
     false.
 
--spec to_frame(pos_integer(), hpack:headers(), hpack:encode_context()) ->
+to_frame(StreamId, Headers, EncodeContext) ->
+    to_frame(StreamId, Headers, undefined, EncodeContext).
+
+-spec to_frame(pos_integer(), hpack:headers(), function(), hpack:encode_context()) ->
                       {{frame_header(), headers()}, hpack:encode_context()}.
 %% Maybe break this up into continuations like the data frame
-to_frame(StreamId, Headers, EncodeContext) ->
-    {HeadersToSend, NewContext} = hpack:encode(Headers, EncodeContext),
+to_frame(StreamId, Headers, Matcher, EncodeContext) ->
+    {HeadersToSend, NewContext} = hpac_encode(Headers, Matcher, EncodeContext),
+    lager:debug("HeadersToSend ~p", [HeadersToSend]),
     L = byte_size(HeadersToSend),
     {{#frame_header{
          length=L,
@@ -57,6 +62,11 @@ to_frame(StreamId, Headers, EncodeContext) ->
         }},
     %%{[<<L:24,?HEADERS:8,?FLAG_END_HEADERS:8,0:1,StreamId:31>>,HeadersToSend],
     NewContext}.
+
+hpac_encode(Headers, undefined, EncodeContext) ->
+    hpack:encode(Headers, EncodeContext);
+hpac_encode(Headers, Fun, EncodeContext) ->
+    hpack:encode(Headers, EncodeContext, Fun).
 
 send({Transport, Socket}, StreamId, Headers, EncodeContext) ->
     {Frame, NewContext} = to_frame(StreamId, Headers, EncodeContext),
