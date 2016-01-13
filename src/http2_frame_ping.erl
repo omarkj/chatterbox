@@ -8,6 +8,7 @@
     format/1,
     read_binary/2,
     to_binary/1,
+    to_frame/1,
     ack/1
     ]).
 
@@ -26,6 +27,13 @@ read_binary(<<Data:8/binary,Rem/bits>>, #frame_header{length=8}) ->
 -spec to_binary(ping()) -> iodata().
 to_binary(#ping{opaque_data=D}) ->
     D.
+
+to_frame(Data) ->
+    [{#frame_header{
+	 length = 8,
+	 type = ?PING,
+	 stream_id = 0
+	}, #ping{opaque_data = Data}}].
 
 -spec ack(ping()) -> {frame_header(), ping()}.
 ack(Ping) ->

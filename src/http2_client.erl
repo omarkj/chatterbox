@@ -27,6 +27,7 @@
 	  client_settings,
 	  server_settings,
 	  ack = false :: boolean(),
+	  ping_freq :: non_neg_integer()|undefined,
 	  streams = dict:new() :: dict:dict()
 	 }).
 
@@ -60,7 +61,8 @@ init([Options]) ->
 				   next_available_stream_id=1},
 	    send_raw(Raw, CS),
 	    {ok, waiting_for_server_settings,
-	     #state{conn=CS, client_settings=#settings{}}};
+	     #state{conn=CS, client_settings=#settings{},
+		    ping_freq=proplists:get_value(ping_freq, Options)}};
 	Error ->
 	    Error
     end.
@@ -75,30 +77,41 @@ waiting_for_server_settings({frame, {#frame_header{type=?SETTINGS},
 waiting_for_server_ack({frame, {#frame_header{type=?SETTINGS}=FrameHeader,
 			        _}}, State) ->
     Ack = ?IS_FLAG(FrameHeader#frame_header.flags, ?FLAG_ACK),
-    {next_state, connected, State#state{ack=Ack}}.
+    maybe_append_ping({next_state, connected, State#state{ack=Ack}}).
 
 connected({send_request, Headers, Body, Options}, #state{conn=CS}=State) ->
     {FramedHeaders, CS1} = frame_headers(Headers, Options, CS),
     FramedBody = frame_body(Body, CS1),
     send_frames([FramedHeaders|FramedBody], CS),
-    {next_state, connected, increment_nasi(State#state{conn=CS})};
-
+    maybe_append_ping({next_state, connected,
+		       increment_nasi(State#state{conn=CS})});
+connected(timeout, #state{conn=CS}=State) ->
+    % Send a PING frame
+    FramedPing = frame_ping(os:system_time(milli_seconds)),
+    send_frames(FramedPing, CS),
+    maybe_append_ping({next_state, connected, State});
+connected({frame, {#frame_header{type=?PING}, #ping{opaque_data=Ping}}},
+	  State) ->
+    Now = os:system_time(milli_seconds),
+    <<PingSentAt:64>> = Ping,
+    lager:debug("Latency to upstream ~p", [Now - PingSentAt]),
+    maybe_append_ping({next_state, connected, State});
 connected({frame, {#frame_header{type=?GOAWAY}, _}}, State) ->
     {stop, normal, State};
 connected({frame, {_FrameHeader, _Payload}=Frame}, State) ->
     lager:debug("Unhandled frame: ~p", [Frame]),
-    {next_state, connected, State};
+    maybe_append_ping({next_state, connected, State});
 connected(_Event, State) ->
-    {next_state, connected, State}.
+    maybe_append_ping({next_state, connected, State}).
 
 handle_event(_Event, FsmState, State) ->
-    {next_state, FsmState, State}.
+    maybe_append_ping({next_state, FsmState, State}).
 
 handle_sync_event(_Event, _From, FsmState, State) ->
-    {next_state, FsmState, State}.
+    maybe_append_ping({next_state, FsmState, State}).
 
 handle_info(_, FsmState, State) ->
-    {next_state, FsmState, State}.
+    maybe_append_ping({next_state, FsmState, State}).
 
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
@@ -109,6 +122,13 @@ terminate(_Reason, _StateName, _State) ->
     lager:debug("terminate reason: ~p~n", [_Reason]).
 
 %% Internal
+maybe_append_ping({Cmd, FsmState, #state{ping_freq=undefined}=State}) ->
+    {Cmd, FsmState, State};
+maybe_append_ping({Cmd, connected, #state{ping_freq=PF}=State}) ->
+    {Cmd, connected, State, PF};
+maybe_append_ping({Cmd, FsmState, State}) ->
+    {Cmd, FsmState, State}.
+
 increment_nasi(#state{conn=#connection_state{next_available_stream_id=NASI}=CS}=State) ->
     State#state{conn=CS#connection_state{next_available_stream_id=NASI+2}}.
 
@@ -117,6 +137,9 @@ send_frames(Frame, #connection_state{socket=Pid}) ->
 
 send_raw(Raw, #connection_state{socket=Pid}) ->
     http2_conn:send_raw(Pid, Raw).
+
+frame_ping(PV) ->
+    http2_frame_ping:to_frame(<<PV:64>>).
 
 frame_headers(Headers, Options,
 	      #connection_state{encode_context=EC,
