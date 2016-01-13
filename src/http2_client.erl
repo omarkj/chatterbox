@@ -27,8 +27,7 @@
 	  client_settings,
 	  server_settings,
 	  ack = false :: boolean(),
-	  ping_freq :: non_neg_integer()|undefined,
-	  streams = dict:new() :: dict:dict()
+	  ping_freq :: non_neg_integer()|undefined
 	 }).
 
 -type option() :: {host, string()} |
@@ -83,13 +82,21 @@ connected({send_request, Headers, Body, Options}, #state{conn=CS}=State) ->
     {FramedHeaders, CS1} = frame_headers(Headers, Options, CS),
     FramedBody = frame_body(Body, CS1),
     send_frames([FramedHeaders|FramedBody], CS),
-    maybe_append_ping({next_state, connected,
-		       increment_nasi(State#state{conn=CS})});
+    State1 = create_new_stream('half_closed_local', State#state{conn=CS1}),
+    maybe_append_ping({next_state, connected, increment_nasi(State1)});
 connected(timeout, #state{conn=CS}=State) ->
     % Send a PING frame
     FramedPing = frame_ping(os:system_time(milli_seconds)),
     send_frames(FramedPing, CS),
     maybe_append_ping({next_state, connected, State});
+connected({frame, {#frame_header{type=?HEADERS}=FH,
+		   #headers{block_fragment=_BF}}}, State) ->
+    State1 = maybe_close_stream(FH, State),
+    maybe_append_ping({next_state, connected, State1});
+connected({frame, {#frame_header{type=?DATA}=FH, #data{data=Data}}}, State) ->
+    lager:debug("Got data: ~p", [Data]),
+    State1 = maybe_close_stream(FH, State),
+    maybe_append_ping({next_state, connected, State1});
 connected({frame, {#frame_header{type=?PING}, #ping{opaque_data=Ping}}},
 	  State) ->
     Now = os:system_time(milli_seconds),
@@ -122,6 +129,25 @@ terminate(_Reason, _StateName, _State) ->
     lager:debug("terminate reason: ~p~n", [_Reason]).
 
 %% Internal
+maybe_close_stream(#frame_header{stream_id=SID, flags=Flags}, #state{conn=#connection_state{streams=Streams}=CS}=State)
+  when ?IS_FLAG(Flags, ?FLAG_END_STREAM) ->
+    case proplists:get_value(SID, Streams) of
+	#stream_state{} = SS ->
+	    lager:debug("Closing stream ~p", [SID]),
+	    Streams1 = lists:keyreplace(SID, 1, Streams,
+					{SID, SS#stream_state{state=closed}}),
+	    State#state{conn=CS#connection_state{streams=Streams1}};
+	undefined ->
+	    State
+    end;
+maybe_close_stream(_, State) ->
+    State.
+
+create_new_stream(StreamState, #state{conn=#connection_state{streams=Streams, next_available_stream_id=NASI}=CS}=State) ->
+    % @Todo add the correct send and recv window sizes
+    Stream = {NASI, #stream_state{stream_id = NASI, state = StreamState}},
+    State#state{conn=CS#connection_state{streams=[Stream|Streams]}}.
+
 maybe_append_ping({Cmd, FsmState, #state{ping_freq=undefined}=State}) ->
     {Cmd, FsmState, State};
 maybe_append_ping({Cmd, connected, #state{ping_freq=PF}=State}) ->
