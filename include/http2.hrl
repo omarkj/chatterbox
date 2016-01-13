@@ -187,7 +187,7 @@
 
 
 -type transport() :: gen_tcp | ssl.
--type socket() :: {gen_tcp, gen_tcp:socket()|undefined} | {ssl, ssl:sslsocket()|undefined}.
+-type socket() :: {gen_tcp, gen_tcp:socket()|undefined} | {ssl, ssl:sslsocket()|undefined} | pid().
 
 -define(PREAMBLE, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n").
 

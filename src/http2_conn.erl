@@ -7,7 +7,8 @@
 
 -export([start_link/1,
 	 send_presamble/1,
-	 send_frames/2]).
+	 send_frames/2,
+	 send_raw/2]).
 
 -export([init/1,
 	 handle_cast/2,
@@ -37,7 +38,11 @@ send_frames(Pid, Frames) ->
 
 -spec send_presamble(pid()) -> ok.
 send_presamble(Pid) ->
-    gen_server:cast(Pid, {send_raw, <<?PREAMBLE>>}).
+    send_raw(Pid, <<?PREAMBLE>>).
+
+-spec send_raw(pid(), iolist()) -> ok.
+send_raw(Pid, Data) ->
+    gen_server:cast(Pid, {send_raw, Data}).
 
 init([Options]) ->
     Host = proplists:get_value(host, Options),
@@ -115,6 +120,8 @@ handle_error({error, timeout}, Parser, State) ->
 handle_error({error, closed}, _, _) ->
     {error, closed}.
 
+recv_(0, HandleFun, Parser, State) ->
+    HandleFun(<<>>, Parser, State);
 recv_(Length, HandleFun, Parser,
       #state{socket=Socket, transport=Transport}=State) ->
     case Transport:recv(Socket, Length, 1) of
@@ -128,7 +135,7 @@ recv() ->
     gen_server:cast(self(), recv).
 
 send_frames_(Frames, State) ->
-    [send_raw_(F, State) || F <- Frames].
+    [send_raw_(http2_frame:to_binary(F), State) || F <- Frames].
 
 send_raw_(Data, #state{socket=Socket, transport=Transport}) ->
     lager:debug("Sending ~p", [Data]),
