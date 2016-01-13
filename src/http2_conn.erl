@@ -45,6 +45,7 @@ send_raw(Pid, Data) ->
     gen_server:cast(Pid, {send_raw, Data}).
 
 init([Options]) ->
+    process_flag(trap_exit, true),
     Host = proplists:get_value(host, Options),
     Port = proplists:get_value(port, Options),
     Client = proplists:get_value(client, Options),
@@ -83,16 +84,23 @@ handle_cast(_Cast, State) ->
 handle_call(_Call, _From, State) ->
     {noreply, State}.
 
+handle_info({'EXIT', From, Reason}, #state{client=From}=State) ->
+    {stop, Reason, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, State) ->
+    lager:debug("Closing connection with reason: ~p", [Reason]),
+    close_socket(State),
     ok.
 
 %% Internal
+close_socket(#state{socket=Socket, transport=Transport}) ->
+    _ = Transport:close(Socket).
+
 notify_client(Frame, #state{client=Client}) ->
     http2_client:frame(Client, Frame).
 
