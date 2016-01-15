@@ -28,7 +28,7 @@
 	  client
 	 }).
 
--spec start_link(list()) -> {ok, pid()}.
+-spec start_link(list()) -> {ok, pid()}|{error, term()}.
 start_link(Options) ->
     gen_server:start_link(?MODULE, [Options], []).
 
