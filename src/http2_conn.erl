@@ -53,10 +53,8 @@ init([Options]) ->
     case Transport:connect(Host, Port, ClientOptions) of
 	{ok, Socket} ->
 	    {ok, #state{socket=Socket, transport=Transport, client=Client}};
-	{error, timeout} ->
-	    {error, timeout};
-	Error ->
-	    Error
+  {error, Reason} ->
+      {stop, Reason}
     end.
 
 handle_cast({send_frames, Frames}, State) ->
